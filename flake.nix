@@ -20,7 +20,13 @@
     };
   };
 
-  outputs = { self, nixpkgs, crane, flake-utils, rust-overlay }:
+  outputs = {
+    self,
+    nixpkgs,
+    crane,
+    flake-utils,
+    rust-overlay
+  }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -28,34 +34,51 @@
           overlays = [ (import rust-overlay) ];
         };
 
+        config = import ./config.nix {};
+
         rustWithWasmTarget = pkgs.rust-bin.stable.latest.default.override {
           targets = [ "wasm32-unknown-unknown" ];
         };
 
         craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustWithWasmTarget;
 
-        celestia = import ./tools/celestia.nix { inherit pkgs; };
-        wasmd = import ./tools/wasmd.nix { inherit pkgs; };
-      in
-      {
-        packages = {
-          celestia = celestia.node;
-          wasmd = wasmd.wasmd { libwasmvm = wasmd.libwasmvm; };
+        buildContract = contract:
+          craneLibWasm.buildPackage {
+            pname = "${config.name}-${contract}";
 
-          contracts = craneLibWasm.buildPackage {
-            src = ./.;
-
-            doCheck = false;
+            src = ./wasm;
 
             # TODO: Implement optimising steps in post-build
             # buildInputs = [
             #  pkgs.binaryen
             #];
 
-            cargoBuildCommand = "RUSTFLAGS='-C link-arg=-s' cargo build --release --lib --target=wasm32-unknown-unknown --locked";
+            cargoExtraArgs = "--target=wasm32-unknown-unknown";
+
+            doCheck = false;
+
+            cargoBuildCommand = "RUSTFLAGS='-C link-arg=-s' cargo build --release --lib --locked --package ${contract}";
           };
 
-          # Docker scripts
+        deployContract = contract:
+          {
+            type = "app";
+            program = "";
+          };
+
+        celestia = import ./tools/celestia.nix { inherit pkgs; };
+        wasmd = import ./tools/wasmd.nix { inherit pkgs; };
+
+        contractNames = builtins.attrNames (pkgs.lib.filterAttrs (k: v: v == "directory") (builtins.readDir ./wasm/contracts/.));
+
+        contractMapper = x: pkgs.lib.attrsets.genAttrs contractNames (name: x name);
+      in
+      {
+        packages = {
+          celestia = celestia.node;
+          wasmd = wasmd.wasmd { libwasmvm = wasmd.libwasmvm; };
+
+          contracts = contractMapper buildContract;
 
           docker-load = pkgs.symlinkJoin rec {
             name = "docker-load";
@@ -70,46 +93,6 @@
           };
         };
 
-        docker = {
-          celestia-light = pkgs.dockerTools.buildImage {
-            name = "celestia-light";
-            tag = "latest";
-            created = "now";
-
-            copyToRoot = pkgs.buildEnv {
-              name = "image-root";
-              paths = [
-                self.packages.${system}.celestia
-              ];
-              pathsToLink = [ "/bin" ];
-            };
-
-            config = {
-              Entrypoint = "/bin/celestia";
-              Workingdir = "/";
-            };
-          };
-
-          wasmd = pkgs.dockerTools.buildImage {
-            name = "wasmd";
-            tag = "latest";
-            created = "now";
-
-            copyToRoot = pkgs.buildEnv {
-              name = "image-root";
-              paths = [ 
-                self.packages.${system}.wasmd
-              ];
-              pathsToLink = [ "/bin" ];
-            };
-
-            config = {
-              Entrypoint = [ "/bin/wasmd" ];
-              Workingdir = "/";
-            };
-          };
-        };
-
         apps = {
           # cel-key: used to generate keys for interacting with the Celestia DA layer
           cel-key = {
@@ -117,16 +100,9 @@
             program = "${celestia.key}/bin/celestia-key";
           };
 
-          # start-rollup: starts both the wasmd and celestia light node services with sane defaults
-          start-rollup = {
-            type = "app";
-            program = "";
-          };
-
           # deploy: deploys a smart contract 
           deploy = {
-            type = "app";
-            program = "";
+            contracts = contractMapper deployContract;
           };
         };
 

@@ -34,31 +34,7 @@
           overlays = [ (import rust-overlay) ];
         };
 
-        lib = (import ./lib { inherit pkgs lib; });
-
-        rustWithWasmTarget = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ "wasm32-unknown-unknown" ];
-        };
-
-        craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustWithWasmTarget;
-
-        buildContract = contract:
-          craneLibWasm.buildPackage {
-            pname = "${contract}";
-
-            src = ./wasm;
-
-            # TODO: Implement optimising steps in post-build
-            # buildInputs = [
-            #  pkgs.binaryen
-            #];
-
-            cargoExtraArgs = "--target=wasm32-unknown-unknown";
-
-            doCheck = false;
-
-            cargoBuildCommand = "RUSTFLAGS='-C link-arg=-s' cargo build --release --lib --locked --package ${contract}";
-          };
+        lib = (import ./lib { inherit pkgs lib crane; });
 
         celestia = import ./tools/celestia.nix { inherit pkgs; };
         wasmd = import ./tools/wasmd.nix { inherit pkgs; };
@@ -89,18 +65,6 @@
             type = "app";
             program = "${celestia.key}/bin/celestia-key";
           };
-        };
-
-        devShell = pkgs.mkShell {
-          name = "celewasm-shell";
-
-          packages = [
-            rustWithWasmTarget
-
-            pkgs.docker
-            pkgs.colima
-          ];
-
         };
       }
     );

@@ -34,7 +34,7 @@
           overlays = [ (import rust-overlay) ];
         };
 
-        config = import ./config.nix {};
+        lib = (import ./lib { inherit pkgs lib; });
 
         rustWithWasmTarget = pkgs.rust-bin.stable.latest.default.override {
           targets = [ "wasm32-unknown-unknown" ];
@@ -44,7 +44,7 @@
 
         buildContract = contract:
           craneLibWasm.buildPackage {
-            pname = "${config.name}-${contract}";
+            pname = "${contract}";
 
             src = ./wasm;
 
@@ -60,25 +60,15 @@
             cargoBuildCommand = "RUSTFLAGS='-C link-arg=-s' cargo build --release --lib --locked --package ${contract}";
           };
 
-        deployContract = contract:
-          {
-            type = "app";
-            program = "";
-          };
-
         celestia = import ./tools/celestia.nix { inherit pkgs; };
         wasmd = import ./tools/wasmd.nix { inherit pkgs; };
-
-        contractNames = builtins.attrNames (pkgs.lib.filterAttrs (k: v: v == "directory") (builtins.readDir ./wasm/contracts/.));
-
-        contractMapper = x: pkgs.lib.attrsets.genAttrs contractNames (name: x name);
-      in
+      in rec 
       {
+        inherit lib;
+
         packages = {
           celestia = celestia.node;
           wasmd = wasmd.wasmd { libwasmvm = wasmd.libwasmvm; };
-
-          contracts = contractMapper buildContract;
 
           docker-load = pkgs.symlinkJoin rec {
             name = "docker-load";
@@ -99,11 +89,6 @@
             type = "app";
             program = "${celestia.key}/bin/celestia-key";
           };
-
-          # deploy: deploys a smart contract 
-          deploy = {
-            contracts = contractMapper deployContract;
-          };
         };
 
         devShell = pkgs.mkShell {
@@ -114,8 +99,6 @@
 
             pkgs.docker
             pkgs.colima
-
-            self.packages.${system}.docker-load
           ];
 
         };
